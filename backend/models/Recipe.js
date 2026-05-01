@@ -1,5 +1,31 @@
 import db from '../config/db.js';
 
+// Helper: parse numeric values safely
+const parseNum = (val, fallback = null) => {
+  if (val === null || val === undefined) return fallback;
+  if (typeof val === 'number') return isNaN(val) ? fallback : Math.round(val);
+  if (typeof val === 'string') {
+    const match = val.match(/[\d.]+/);
+    return match ? parseFloat(match[0]) : fallback;
+  }
+  return fallback;
+};
+
+// Helper: convert fraction strings like "1/2", "1-2", "1 1/2" to decimal strings
+const fractionToDecimal = (value) => {
+  if (value === null || value === undefined) return null;
+  const str = String(value).trim();
+  if (!isNaN(str) && str !== '') return String(parseFloat(str));
+  if (/^\d+\s*-\s*\d+$/.test(str)) return String(parseInt(str));
+  const mixed = str.match(/^(\d+)\s+(\d+)\/(\d+)$/);
+  if (mixed) return String(parseInt(mixed[1]) + parseInt(mixed[2]) / parseInt(mixed[3]));
+  const fraction = str.match(/^(\d+)\/(\d+)$/);
+  if (fraction) return String(parseInt(fraction[1]) / parseInt(fraction[2]));
+  const firstNum = str.match(/[\d.]+/);
+  if (firstNum) return String(parseFloat(firstNum[0]));
+  return null;
+};
+
 class Recipe {
   static async create(userId, recipeData) {
     const client = await db.pool.connect();
@@ -12,9 +38,6 @@ class Recipe {
         description,
         cuisine_type,
         difficulty,
-        prep_time,
-        cook_time,
-        servings,
         instructions,
         dietary_tags = [],
         user_notes,
@@ -22,6 +45,11 @@ class Recipe {
         ingredients = [],
         nutrition = {}
       } = recipeData;
+
+      const prep_time = parseNum(recipeData.prep_time);
+      const cook_time = parseNum(recipeData.cook_time);
+      const total_time = parseNum(recipeData.total_time);
+      const servings   = parseNum(recipeData.servings, 1);
 
       const recipeResult = await client.query(
         `INSERT INTO recipes
@@ -46,51 +74,50 @@ class Recipe {
 
       const recipe = recipeResult.rows[0];
 
-      // Ingredients insert (same)
+      // ✅ FIXED: Correct parameterized query for multiple ingredients
       if (ingredients.length > 0) {
-        const ingredientValues = ingredients
-          .map((ing, idx) => `($1, $${idx * 3 + 2}, $${idx * 3 + 3}, $${idx * 3 + 4})`)
-          .join(',');
+        const placeholders = [];
+        const params = [];
+        let paramIdx = 1;
 
-        const ingredientParams = [recipe.id];
-        ingredients.forEach(ing => {
-          ingredientParams.push(ing.name, ing.quantity, ing.unit);
-        });
+        for (const ing of ingredients) {
+          placeholders.push(`($${paramIdx}, $${paramIdx + 1}, $${paramIdx + 2}, $${paramIdx + 3})`);
+          params.push(
+            recipe.id,
+            ing.name,
+            fractionToDecimal(ing.quantity), // sanitize here too as safety net
+            ing.unit || ''
+          );
+          paramIdx += 4;
+        }
 
         await client.query(
           `INSERT INTO recipe_ingredients (recipe_id, ingredient_name, quantity, unit)
-           VALUES ${ingredientValues}`,
-          ingredientParams
+           VALUES ${placeholders.join(',')}`,
+          params
         );
       }
 
-      // ✅ FIXED Nutrition Insert (with fallback)
+      // Nutrition insert
       if (nutrition && Object.keys(nutrition).length > 0) {
+        const calories = parseNum(nutrition.calories);
+        const protein  = parseNum(nutrition.protein);
+        const carbs    = parseNum(nutrition.carbs);
+        const fats     = parseNum(nutrition.fats);
+        const fiber    = parseNum(nutrition.fiber);
+
         try {
           await client.query(
             `INSERT INTO recipe_nutrition (recipe_id, calories, protein, carbs, fats, fiber)
              VALUES ($1, $2, $3, $4, $5, $6)`,
-            [
-              recipe.id,
-              nutrition.calories || null,
-              nutrition.protein || null,
-              nutrition.carbs || null,
-              nutrition.fats || null,
-              nutrition.fiber || null
-            ]
+            [recipe.id, calories, protein, carbs, fats, fiber]
           );
         } catch (err) {
           if (err.message.includes('fiber')) {
             await client.query(
               `INSERT INTO recipe_nutrition (recipe_id, calories, protein, carbs, fats)
                VALUES ($1, $2, $3, $4, $5)`,
-              [
-                recipe.id,
-                nutrition.calories || null,
-                nutrition.protein || null,
-                nutrition.carbs || null,
-                nutrition.fats || null
-              ]
+              [recipe.id, calories, protein, carbs, fats]
             );
           } else {
             throw err;
@@ -109,7 +136,6 @@ class Recipe {
     }
   }
 
-  // ✅ FIXED SELECT (with fallback)
   static async findById(id, userId) {
     const recipeResult = await db.query(
       'SELECT * FROM recipes WHERE id = $1 AND user_id = $2',
@@ -126,7 +152,6 @@ class Recipe {
     );
 
     let nutritionResult;
-
     try {
       nutritionResult = await db.query(
         'SELECT calories, protein, carbs, fats, fiber FROM recipe_nutrition WHERE recipe_id = $1',
@@ -149,8 +174,6 @@ class Recipe {
       nutrition: nutritionResult.rows[0] || null
     };
   }
-
-  // baaki sab same (no change needed)
 
   static async findByUserId(userId, filters = {}) {
     let query = 'SELECT r.*, rn.calories FROM recipes r LEFT JOIN recipe_nutrition rn ON r.id = rn.recipe_id WHERE r.user_id = $1';
@@ -216,7 +239,6 @@ class Recipe {
        LIMIT $2`,
       [userId, limit]
     );
-
     return result.rows;
   }
 
@@ -226,14 +248,15 @@ class Recipe {
       description,
       cuisine_type,
       difficulty,
-      prep_time,
-      cook_time,
-      servings,
       instructions,
       dietary_tags,
       user_notes,
       image_url,
     } = updates;
+
+    const prep_time = parseNum(updates.prep_time);
+    const cook_time = parseNum(updates.cook_time);
+    const servings  = parseNum(updates.servings);
 
     const result = await db.query(
       `UPDATE recipes
@@ -251,19 +274,11 @@ class Recipe {
        WHERE id = $12 AND user_id = $13
        RETURNING *`,
       [
-        name,
-        description,
-        cuisine_type,
-        difficulty,
-        prep_time,
-        cook_time,
-        servings,
+        name, description, cuisine_type, difficulty,
+        prep_time, cook_time, servings,
         instructions ? JSON.stringify(instructions) : null,
-        dietary_tags,
-        user_notes,
-        image_url,
-        id,
-        userId,
+        dietary_tags, user_notes, image_url,
+        id, userId,
       ]
     );
 
@@ -275,7 +290,6 @@ class Recipe {
       'DELETE FROM recipes WHERE id = $1 AND user_id = $2 RETURNING *',
       [id, userId]
     );
-
     return result.rows[0];
   }
 
@@ -289,7 +303,6 @@ class Recipe {
        WHERE user_id = $1`,
       [userId]
     );
-
     return result.rows[0];
   }
 }

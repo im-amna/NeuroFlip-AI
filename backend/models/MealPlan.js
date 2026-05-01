@@ -1,10 +1,39 @@
 import db from '../config/db.js';
 
 class MealPlan {
+
+    /**
+     * Create meal plan entry
+     */
+    static async create(userId, { recipe_id, meal_date, meal_type }) {
+        const result = await db.query(
+            `INSERT INTO meal_plans (user_id, recipe_id, meal_date, meal_type)
+             VALUES ($1, $2, $3, $4)
+             RETURNING id, user_id, recipe_id, meal_date::text, meal_type, created_at`,
+            [userId, recipe_id, meal_date, meal_type]
+        );
+        return result.rows[0];
+    }
+
+    /**
+     * Delete meal plan entry
+     */
+    static async delete(id, userId) {
+        const result = await db.query(
+            `DELETE FROM meal_plans
+             WHERE id = $1 AND user_id = $2
+             RETURNING *`,
+            [id, userId]
+        );
+        return result.rows[0];
+    }
+
+    /**
+     * Find by date range
+     */
     static async findByDateRange(userId, startDate, endDate) {
         const result = await db.query(
-            `
-            SELECT 
+            `SELECT 
               mp.id,
               mp.user_id,
               mp.recipe_id,
@@ -26,8 +55,7 @@ class MealPlan {
                 WHEN mp.meal_type = 'breakfast' THEN 1
                 WHEN mp.meal_type = 'lunch' THEN 2
                 WHEN mp.meal_type = 'dinner' THEN 3
-              END
-            `,
+              END`,
             [userId, startDate, endDate]
         );
         return result.rows;
@@ -39,12 +67,11 @@ class MealPlan {
     static async getWeeklyPlan(userId, weekStartDate) {
         const endDate = new Date(weekStartDate);
         endDate.setDate(endDate.getDate() + 6);
-
         return await this.findByDateRange(userId, weekStartDate, endDate);
     }
 
     /**
-     * Get upcoming meals (next 7 days)
+     * Get upcoming meals
      */
     static async getUpcoming(userId, limit = 5) {
         const result = await db.query(
@@ -62,7 +89,6 @@ class MealPlan {
             LIMIT $2`,
             [userId, limit]
         );
-
         return result.rows;
     }
 
@@ -70,15 +96,14 @@ class MealPlan {
      * Get meal plan stats
      */
     static async getStats(userId) {
-        const result = await db.query(`
-            SELECT
+        const result = await db.query(
+            `SELECT
             COUNT(*) as total_planned_meals,
             COUNT(*) FILTER (WHERE meal_date >= CURRENT_DATE AND meal_date < CURRENT_DATE + INTERVAL '7 days') as this_week_count
             FROM meal_plans
             WHERE user_id = $1`,
             [userId]
         );
-
         return result.rows[0];
     }
 }

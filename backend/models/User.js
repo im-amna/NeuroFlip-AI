@@ -1,5 +1,5 @@
 import db from '../config/db.js';
-import bcrypt from 'bcryptjs'; // correct import
+import bcrypt from 'bcryptjs';
 
 class User {
   /**
@@ -21,7 +21,7 @@ class User {
    */
   static async findById(id) {
     const result = await db.query(
-      `SELECT id, email, name, created_at, updated_at
+      `SELECT id, email, name, password_hash, created_at, updated_at
        FROM users
        WHERE id = $1`,
       [id]
@@ -34,7 +34,7 @@ class User {
    */
   static async findByEmail(email) {
     const result = await db.query(
-      `SELECT id, email, name, created_at, updated_at
+      `SELECT id, email, name, password_hash, created_at, updated_at
        FROM users
        WHERE email = $1`,
       [email]

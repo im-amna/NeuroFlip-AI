@@ -1,4 +1,5 @@
 import PantryItem from '../models/PantryItem.js';
+import db from '../config/db.js';
 
 /**
  * Get all pantry items
@@ -116,6 +117,54 @@ export const deletePantryItem = async (req, res, next) => {
       success: true,
       message: 'Pantry item deleted',
       data: { item }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Add checked shopping list items to pantry ✅ NEW
+ */
+export const addFromShoppingList = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+
+    // Get all checked shopping list items
+    const checkedItems = await db.query(
+      'SELECT * FROM shopping_list_items WHERE user_id = $1 AND is_checked = true',
+      [userId]
+    );
+
+    if (checkedItems.rows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No checked items found'
+      });
+    }
+
+    // Add each to pantry
+    const addedItems = [];
+    for (const item of checkedItems.rows) {
+      const pantryItem = await PantryItem.create(userId, {
+        name: item.ingredient_name,
+        quantity: item.quantity,
+        unit: item.unit,
+        category: item.category || 'Uncategorized',
+      });
+      addedItems.push(pantryItem);
+    }
+
+    // Delete checked items from shopping list
+    await db.query(
+      'DELETE FROM shopping_list_items WHERE user_id = $1 AND is_checked = true',
+      [userId]
+    );
+
+    res.json({
+      success: true,
+      message: `${addedItems.length} items added to pantry`,
+      data: { items: addedItems }
     });
   } catch (error) {
     next(error);
